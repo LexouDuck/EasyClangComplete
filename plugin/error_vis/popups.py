@@ -44,12 +44,10 @@ OPEN_FILES_REFERENCES_TEMPLATE = \
 
 BRIEF_DOC_TEMPLATE = """### Brief documentation:
 {content}
-
 """
 
 FULL_DOC_TEMPLATE = """### Detailed documentation:
 {content}
-
 """
 
 BODY_TEMPLATE = """### Body:
@@ -103,24 +101,32 @@ class Popup:
             macro_parser = MacroParser(cursor.spelling, cursor.location)
 
         if not isinstance(settings.popup_sections, list):
-            log.error("Bad config value: \"popup_sections\" should be a list of strings");
+            log.error("Bad config value: \"popup_sections\" " +
+                      "should be a list of strings")
         elif len(settings.popup_sections) == 0:
-            log.error("Bad config value: \"popup_sections\" setting should have at least one element");
+            log.error("Bad config value: \"popup_sections\" " +
+                      "setting should have at least one element")
         else:
             popup.__text = ""
             for i in settings.popup_sections:
                 if not isinstance(i, str):
-                    log.error("Bad config value: \"popup_sections\" should be a list containing only strings");
+                    log.error("Bad config value: \"popup_sections\" " +
+                              "should be a list containing only strings")
                 elif re.match(r'[Dd]eclaration', i):
-                    popup.__text += Popup.info_section_declaration(cursor, cindex, settings, macro_parser)
+                    popup.__text += Popup.info_section_declaration(
+                        cursor, cindex, settings, macro_parser)
                 elif re.match(r'[Rr]eferences', i):
-                    popup.__text += Popup.info_section_references(cursor, cindex, settings, macro_parser)
+                    popup.__text += Popup.info_section_references(
+                        cursor, cindex, settings, macro_parser)
                 elif re.match(r'[Dd]ocumentation', i):
-                    popup.__text += Popup.info_section_documentation(cursor, cindex, settings, macro_parser)
+                    popup.__text += Popup.info_section_documentation(
+                        cursor, cindex, settings, macro_parser)
                 elif re.match(r'([Bb]ody|[Ss]ource)', i):
-                    popup.__text += Popup.info_section_body(cursor, cindex, settings, macro_parser)
+                    popup.__text += Popup.info_section_body(
+                        cursor, cindex, settings, macro_parser)
                 else:
-                    log.error("Bad config value: \"popup_sections\" has unknown value: \"" + i + "\"");
+                    log.error("Bad config value: \"popup_sections\" " +
+                              "has unknown value: \"" + i + "\"")
 
         return popup
 
@@ -197,18 +203,43 @@ class Popup:
         return DECLARATION_TEMPLATE.format(
             type_declaration=markupsafe.escape(declaration_text))
 
-
     @staticmethod
     def info_section_references(cursor, cindex, settings, macro_parser):
         """Generate the info text for the declaration."""
-        if settings.show_index_references:
-            return Popup.__lookup_in_sublime_index(
-                sublime.active_window(), cursor.spelling)
-        return result
+        window = sublime.active_window()
+        spelling = cursor.spelling
+        if not settings.show_index_references:
+            return ""
+
+        def lookup(lookup_function, spelling):
+            index = lookup_function(spelling)
+            references = []
+            for location_tuple in index:
+                location = IndexLocation(filename=location_tuple[0],
+                                         line=location_tuple[2][0],
+                                         column=location_tuple[2][1])
+                references.append(
+                    "{reference}: `{file}:{line}:{col}`".format(
+                        reference=Popup.link_from_location(location, spelling),
+                        file=location.file.short_name,
+                        line=location.line,
+                        col=location.column))
+            return markupsafe.escape("\n - ".join(references))
+
+        index_references = lookup(window.lookup_symbol_in_index, spelling)
+        usage_references = lookup(window.lookup_symbol_in_open_files, spelling)
+        output_text = ""
+        if index_references:
+            output_text += INDEX_REFERENCES_TEMPLATE.format(
+                references=" - " + index_references)
+        if usage_references:
+            output_text += OPEN_FILES_REFERENCES_TEMPLATE.format(
+                references=" - " + usage_references)
+        return output_text
 
     @staticmethod
     def info_section_documentation(cursor, cindex, settings, macro_parser):
-        """Generate text for documentation comment(s), if any"""
+        """Generate text for documentation comment(s), if any."""
         documentation_text = ""
         has_comment = None
         if macro_parser is not None:
@@ -241,12 +272,12 @@ class Popup:
                 # Doxygen comment: multi-line detailed description
                 if cursor.raw_comment:
                     clean_comment = Popup.cleanup_comment(has_comment).strip()
-                    log.debug("Cleaned comment:\n" + clean_comment)
                     if clean_comment:
                         # Only add this if there is a Doxygen comment.
                         documentation_text += FULL_DOC_TEMPLATE.format(
                             content=CODE_TEMPLATE.format(code=clean_comment,
                                                          lang=""))
+        log.debug("Processed comment:\n" + documentation_text)
         return documentation_text
 
     @staticmethod
@@ -274,9 +305,10 @@ class Popup:
             body_cursor = cursor
         elif cursor.kind == cindex.CursorKind.CLASS_TEMPLATE:
             body_cursor = cursor.get_definition()
+        body = ""
         # Show macro body
         if macro_parser is not None:
-            body = "#define "
+            body += "#define "
             body += cursor.spelling
             if (len(macro_parser.args_string) > 0):
                 body += macro_parser.args_string
@@ -285,7 +317,7 @@ class Popup:
             body += macro_parser.body_string
         # Show function declaration
         elif settings.show_type_body and is_function:
-            body = cursor.result_type.spelling
+            body += cursor.result_type.spelling
             body += " "
             body += cursor.spelling
             args = []
@@ -305,36 +337,13 @@ class Popup:
         elif settings.show_type_body and body_cursor and body_cursor.extent:
             body = Popup.get_text_by_extent(body_cursor.extent)
             body = Popup.prettify_body(body)
-        # Format into code block with syntax highlighting
-        return BODY_TEMPLATE.format(
-            content=CODE_TEMPLATE.format(lang="c++", code=body))
 
-    @staticmethod
-    def __lookup_in_sublime_index(window, spelling):
-        def lookup(lookup_function, spelling):
-            index = lookup_function(spelling)
-            references = []
-            for location_tuple in index:
-                location = IndexLocation(filename=location_tuple[0],
-                                         line=location_tuple[2][0],
-                                         column=location_tuple[2][1])
-                references.append(
-                    "{reference}: `{file}:{line}:{col}`".format(
-                        reference=Popup.link_from_location(location, spelling),
-                        file=location.file.short_name,
-                        line=location.line,
-                        col=location.column))
-            return markupsafe.escape("\n - ".join(references))
-        index_references = lookup(window.lookup_symbol_in_index, spelling)
-        usage_references = lookup(window.lookup_symbol_in_open_files, spelling)
-        output_text = ""
-        if index_references:
-            output_text += INDEX_REFERENCES_TEMPLATE.format(
-                references=" - " + index_references)
-        if usage_references:
-            output_text += OPEN_FILES_REFERENCES_TEMPLATE.format(
-                references=" - " + usage_references)
-        return output_text
+        # Format into code block with syntax highlighting
+        if len(body) > 0:
+            return BODY_TEMPLATE.format(
+                content=CODE_TEMPLATE.format(lang="c++", code=body))
+        else:
+            return ""
 
     def info_objc(cursor, cindex, settings):
         """Provide information about Objective C cursors."""
@@ -603,16 +612,17 @@ class Popup:
         if (index >= 0):
             result = result[:index] + "\n**Parameters**:\n" + result[index:]
         doc_replace = [
-            [ r'@param\s+([_a-zA-Z0-9.]+)\b\s*', "- `\\1`: " ],
-            [ r'@(retval|returns?)\b\s*',   "\n**Returns**:\n" ],
-            [ r'@(exception|throws?)\b\s*', "\n**Exceptions**:\n" ],
-            [ r'@(sa|see(also)?)\b\s*',     "\n**See also**:\n" ],
-            [ r'@f\$', "`" ],
-            [ r'@[{}]', "" ],
+            [r'@param\s+([_a-zA-Z0-9.]+)\s*', "- `\\1`: "],
+            [r'@(retval|returns?)\b\s*',   "\n**Returns**:\n"],
+            [r'@(exception|throws?)\b\s*', "\n**Exceptions**:\n"],
+            [r'@(sa|see(also)?)\b\s*',     "\n**See also**:\n"],
+            [r'@f\$', "`"],
+            [r'@[{}]', ""],
         ]
         for replace in doc_replace:
             result = re.sub(replace[0], replace[1], result)
         window = sublime.active_window()
+
         def _make_doxygen_hyperlink(match):
             spelling = match.group(1)
             if len(spelling) == 0:
@@ -628,9 +638,9 @@ class Popup:
                                             trailing_space=False)
             return link
         result = re.sub(r'\b([_a-zA-Z0-9]+)(?=\(\))',
-                           _make_doxygen_hyperlink, result)
+                        _make_doxygen_hyperlink, result)
         result = re.sub(r'#([_a-zA-Z0-9]+)\b',
-                           _make_doxygen_hyperlink, result)
+                        _make_doxygen_hyperlink, result)
         return result
 
     @staticmethod
