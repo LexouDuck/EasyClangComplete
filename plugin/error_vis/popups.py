@@ -97,38 +97,46 @@ class Popup:
             settings.popup_maximum_width, settings.popup_maximum_height
         ))
         popup.__popup_type = 'panel-info "ECC: Info"'
-        is_type_decl = cursor.kind in [
-            cindex.CursorKind.STRUCT_DECL,
-            cindex.CursorKind.UNION_DECL,
-            cindex.CursorKind.CLASS_DECL,
-            cindex.CursorKind.ENUM_DECL,
-            cindex.CursorKind.TYPEDEF_DECL,
-            cindex.CursorKind.TYPE_ALIAS_DECL,
-            cindex.CursorKind.TYPE_REF
-        ]
-        is_macro = cursor.kind == cindex.CursorKind.MACRO_DEFINITION
-        is_class_template = cursor.kind == cindex.CursorKind.CLASS_TEMPLATE
+
+        macro_parser = None
+        if cursor.kind == cindex.CursorKind.MACRO_DEFINITION:
+            macro_parser = MacroParser(cursor.spelling, cursor.location)
+
+        if not isinstance(settings.popup_sections, list):
+            log.error("Bad config value: \"popup_sections\" should be a list of strings");
+        elif len(settings.popup_sections) == 0:
+            log.error("Bad config value: \"popup_sections\" setting should have at least one element");
+        else:
+            popup.__text = ""
+            for i in settings.popup_sections:
+                if not isinstance(i, str):
+                    log.error("Bad config value: \"popup_sections\" should be a list containing only strings");
+                elif re.match(r'[Dd]eclaration', i):
+                    popup.__text += Popup.info_section_declaration(cursor, cindex, settings, macro_parser)
+                elif re.match(r'[Rr]eferences', i):
+                    popup.__text += Popup.info_section_references(cursor, cindex, settings, macro_parser)
+                elif re.match(r'[Dd]ocumentation', i):
+                    popup.__text += Popup.info_section_documentation(cursor, cindex, settings, macro_parser)
+                elif re.match(r'([Bb]ody|[Ss]ource)', i):
+                    popup.__text += Popup.info_section_body(cursor, cindex, settings, macro_parser)
+                else:
+                    log.error("Bad config value: \"popup_sections\" has unknown value: \"" + i + "\"");
+
+        return popup
+
+    @staticmethod
+    def info_section_declaration(cursor, cindex, settings, macro_parser):
+        """Generate the info text for the declaration."""
         is_function = cursor.kind in [
             cindex.CursorKind.FUNCTION_DECL,
             cindex.CursorKind.CXX_METHOD,
             cindex.CursorKind.CONSTRUCTOR,
             cindex.CursorKind.DESTRUCTOR,
             cindex.CursorKind.CONVERSION_FUNCTION,
-            cindex.CursorKind.FUNCTION_TEMPLATE]
-
-        # Show the return type of the function/method if applicable,
-        # macros just show that they are a macro.
-        macro_parser = None
-        body_cursor = None
-        if is_type_decl:
-            body_cursor = cursor
-        elif is_class_template:
-            body_cursor = cursor.get_definition()
-
-        # Initialize the text the declaration.
+            cindex.CursorKind.FUNCTION_TEMPLATE
+        ]
         declaration_text = ''
-        if is_macro:
-            macro_parser = MacroParser(cursor.spelling, cursor.location)
+        if macro_parser is not None:
             declaration_text += r'\#define '
         else:
             if cursor.result_type.spelling:
@@ -153,7 +161,7 @@ class Popup:
             declaration_text += cursor.spelling
         # Macro/function/method arguments
         args_string = None
-        if is_macro:
+        if macro_parser is not None:
             # cursor.get_arguments() doesn't give us anything for macros,
             # so we have to parse those ourselves
             args_string = macro_parser.args_string
@@ -186,16 +194,24 @@ class Popup:
         if cursor.is_const_method():
             declaration_text += " const"
         # Save declaration text.
-        popup.__text = DECLARATION_TEMPLATE.format(
+        return DECLARATION_TEMPLATE.format(
             type_declaration=markupsafe.escape(declaration_text))
 
-        if settings.show_index_references:
-            popup.__text += Popup.__lookup_in_sublime_index(
-                sublime.active_window(), cursor.spelling)
 
-        # Show documentation comment(s), if any
+    @staticmethod
+    def info_section_references(cursor, cindex, settings, macro_parser):
+        """Generate the info text for the declaration."""
+        if settings.show_index_references:
+            return Popup.__lookup_in_sublime_index(
+                sublime.active_window(), cursor.spelling)
+        return result
+
+    @staticmethod
+    def info_section_documentation(cursor, cindex, settings, macro_parser):
+        """Generate text for documentation comment(s), if any"""
+        documentation_text = ""
         has_comment = None
-        if is_macro:
+        if macro_parser is not None:
             has_comment = macro_parser.doc_string
         else:
             has_comment = cursor.raw_comment
@@ -207,19 +223,19 @@ class Popup:
                 brief_comment = brief_comment.lstrip(charset_comment)
                 if len(brief_comment) > 0:
                     brief_comment = Popup.doxygen_comment(brief_comment)
-                    popup.__text += BRIEF_DOC_TEMPLATE.format(
+                    documentation_text += BRIEF_DOC_TEMPLATE.format(
                         content=brief_comment)
                 # Doxygen comment: multi-line detailed description
                 mdcomment = Popup.cleanup_comment(has_comment)
                 if len(mdcomment) > 0:
                     mdcomment = Popup.doxygen_comment(mdcomment)
                     # Only add this if there is a Doxygen comment.
-                    popup.__text += FULL_DOC_TEMPLATE.format(
+                    documentation_text += FULL_DOC_TEMPLATE.format(
                         content=mdcomment)
             else:
                 # Doxygen comment: single-line brief description
                 if cursor.brief_comment:
-                    popup.__text += BRIEF_DOC_TEMPLATE.format(
+                    documentation_text += BRIEF_DOC_TEMPLATE.format(
                         content=CODE_TEMPLATE.format(code=cursor.brief_comment,
                                                      lang=""))
                 # Doxygen comment: multi-line detailed description
@@ -228,11 +244,38 @@ class Popup:
                     log.debug("Cleaned comment:\n" + clean_comment)
                     if clean_comment:
                         # Only add this if there is a Doxygen comment.
-                        popup.__text += FULL_DOC_TEMPLATE.format(
+                        documentation_text += FULL_DOC_TEMPLATE.format(
                             content=CODE_TEMPLATE.format(code=clean_comment,
                                                          lang=""))
+        return documentation_text
+
+    @staticmethod
+    def info_section_body(cursor, cindex, settings, macro_parser):
+        """Generate info text for the "body" section."""
+        is_type_decl = cursor.kind in [
+            cindex.CursorKind.STRUCT_DECL,
+            cindex.CursorKind.UNION_DECL,
+            cindex.CursorKind.CLASS_DECL,
+            cindex.CursorKind.ENUM_DECL,
+            cindex.CursorKind.TYPEDEF_DECL,
+            cindex.CursorKind.TYPE_ALIAS_DECL,
+            cindex.CursorKind.TYPE_REF
+        ]
+        is_function = cursor.kind in [
+            cindex.CursorKind.FUNCTION_DECL,
+            cindex.CursorKind.CXX_METHOD,
+            cindex.CursorKind.CONSTRUCTOR,
+            cindex.CursorKind.DESTRUCTOR,
+            cindex.CursorKind.CONVERSION_FUNCTION,
+            cindex.CursorKind.FUNCTION_TEMPLATE
+        ]
+        body_cursor = None
+        if is_type_decl:
+            body_cursor = cursor
+        elif cursor.kind == cindex.CursorKind.CLASS_TEMPLATE:
+            body_cursor = cursor.get_definition()
         # Show macro body
-        if is_macro:
+        if macro_parser is not None:
             body = "#define "
             body += cursor.spelling
             if (len(macro_parser.args_string) > 0):
@@ -240,8 +283,6 @@ class Popup:
             else:
                 body += " "
             body += macro_parser.body_string
-            popup.__text += BODY_TEMPLATE.format(
-                content=CODE_TEMPLATE.format(lang="c++", code=body))
         # Show function declaration
         elif settings.show_type_body and is_function:
             body = cursor.result_type.spelling
@@ -260,16 +301,13 @@ class Popup:
                 body += ', '.join(args)
             body += ');'
             body = Popup.prettify_body(body)
-            popup.__text += BODY_TEMPLATE.format(
-                content=CODE_TEMPLATE.format(lang="c++", code=body))
         # Show type declaration
         elif settings.show_type_body and body_cursor and body_cursor.extent:
             body = Popup.get_text_by_extent(body_cursor.extent)
             body = Popup.prettify_body(body)
-            popup.__text += BODY_TEMPLATE.format(
-                content=CODE_TEMPLATE.format(lang="c++", code=body))
-
-        return popup
+        # Format into code block with syntax highlighting
+        return BODY_TEMPLATE.format(
+            content=CODE_TEMPLATE.format(lang="c++", code=body))
 
     @staticmethod
     def __lookup_in_sublime_index(window, spelling):

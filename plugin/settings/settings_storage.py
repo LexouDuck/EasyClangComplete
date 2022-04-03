@@ -105,6 +105,7 @@ class SettingsStorage:
         "max_cache_age",
         "popup_maximum_height",
         "popup_maximum_width",
+        "popup_sections",
         "progress_style",
         "show_errors",
         "show_type_body",
