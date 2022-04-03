@@ -44,10 +44,12 @@ OPEN_FILES_REFERENCES_TEMPLATE = \
 
 BRIEF_DOC_TEMPLATE = """### Brief documentation:
 {content}
+
 """
 
 FULL_DOC_TEMPLATE = """### Detailed documentation:
 {content}
+
 """
 
 BODY_TEMPLATE = """### Body:
@@ -203,33 +205,14 @@ class Popup:
                 charset_comment = '/' + '*' + '!' + string.whitespace
                 brief_comment = has_comment.split("\n")[0]
                 brief_comment = brief_comment.lstrip(charset_comment)
-                if brief_comment:
+                if len(brief_comment) > 0:
+                    brief_comment = Popup.doxygen_comment(brief_comment)
                     popup.__text += BRIEF_DOC_TEMPLATE.format(
                         content=brief_comment)
                 # Doxygen comment: multi-line detailed description
                 mdcomment = Popup.cleanup_comment(has_comment)
-                index = mdcomment.find("@param")
-                if (index >= 0):
-                    mdcomment = mdcomment[:index] + "\n**Parameters**:\n" + mdcomment[index:]
-                doc_replace = [
-                    [ r'@param\s+([_a-zA-Z0-9.]+)\s*', "- `\\1`: " ],
-                    [ r'@returns?\s*',  "\n**Returns**:\n" ],
-                    [ r'@see(also)?\b', "\n**See also**:\n" ],
-                    [ r'@f\$', "`" ],
-                    [ r'@[{}]', "" ],
-                ]
-                for replace in doc_replace:
-                    mdcomment = re.sub(replace[0], replace[1], mdcomment)
-                #window = sublime.active_window()
-                #regexp = re.compile(r'\b([_a-zA-Z0-9]+)\(\)')
-                #for match in re.finditer(regexp, mdcomment):
-                #    symbol = window.lookup_symbol_in_index(match.group(1))
-                #    print("DEBUG: found symbol: " + str(symbol))
-                #    link = Popup.link_from_location(
-                #        Popup.location_from_type(symbol),
-                #        match.group(1))
-                #    print("DEBUG: created link: " + str(link))
-                if mdcomment:
+                if len(mdcomment) > 0:
+                    mdcomment = Popup.doxygen_comment(mdcomment)
                     # Only add this if there is a Doxygen comment.
                     popup.__text += FULL_DOC_TEMPLATE.format(
                         content=mdcomment)
@@ -285,6 +268,7 @@ class Popup:
             body = Popup.prettify_body(body)
             popup.__text += BODY_TEMPLATE.format(
                 content=CODE_TEMPLATE.format(lang="c++", code=body))
+
         return popup
 
     @staticmethod
@@ -572,6 +556,44 @@ class Popup:
                 continue
             clean_lines.append(line)
         return '\n'.join(clean_lines)
+
+    @staticmethod
+    def doxygen_comment(mdcomment):
+        """Transform cleaned doxygen comment to valid markdown."""
+        result = mdcomment
+        index = mdcomment.find("@param")
+        if (index >= 0):
+            result = result[:index] + "\n**Parameters**:\n" + result[index:]
+        doc_replace = [
+            [ r'@param\s+([_a-zA-Z0-9.]+)\b\s*', "- `\\1`: " ],
+            [ r'@(retval|returns?)\b\s*',   "\n**Returns**:\n" ],
+            [ r'@(exception|throws?)\b\s*', "\n**Exceptions**:\n" ],
+            [ r'@(sa|see(also)?)\b\s*',     "\n**See also**:\n" ],
+            [ r'@f\$', "`" ],
+            [ r'@[{}]', "" ],
+        ]
+        for replace in doc_replace:
+            result = re.sub(replace[0], replace[1], result)
+        window = sublime.active_window()
+        def _make_doxygen_hyperlink(match):
+            spelling = match.group(1)
+            if len(spelling) == 0:
+                return spelling
+            symbol = window.lookup_symbol_in_index(spelling)
+            if len(symbol) == 0:
+                return spelling
+            location_tuple = symbol[0]
+            location = IndexLocation(filename=location_tuple[0],
+                                     line=location_tuple[2][0],
+                                     column=location_tuple[2][1])
+            link = Popup.link_from_location(location, spelling,
+                                            trailing_space=False)
+            return link
+        result = re.sub(r'\b([_a-zA-Z0-9]+)(?=\(\))',
+                           _make_doxygen_hyperlink, result)
+        result = re.sub(r'#([_a-zA-Z0-9]+)\b',
+                           _make_doxygen_hyperlink, result)
+        return result
 
     @staticmethod
     def location_from_type(clang_type):
