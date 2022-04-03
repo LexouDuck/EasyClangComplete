@@ -459,6 +459,17 @@ symbol under cursor taking them from Sublime Text index.
     "show_index_references": true,
     ```
 
+### **`show_doc_as_markdown`**
+
+Makes any documentation comments show up as rendered Markdown in the popup.
+By default, this value is set to `false`, which means that any documentation
+comments will be displayed within a literal text block (triple-backquotes).
+
+!!! example "Default value"
+    ```json
+    "show_doc_as_markdown": false,
+    ```
+
 
 
 ### **`autocomplete_includes`**

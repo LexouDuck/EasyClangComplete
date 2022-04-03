@@ -1,5 +1,6 @@
 """Incapsulate popup creation."""
 
+import string
 import sublime
 import mdpopups
 import markupsafe
@@ -190,24 +191,63 @@ class Popup:
             popup.__text += Popup.__lookup_in_sublime_index(
                 sublime.active_window(), cursor.spelling)
 
+        # Show documentation comment(s), if any
         has_comment = None
         if is_macro:
             has_comment = macro_parser.doc_string
         else:
             has_comment = cursor.raw_comment
-        # Doxygen comment: single-line brief description
-        if has_comment and cursor.brief_comment:
-            popup.__text += BRIEF_DOC_TEMPLATE.format(
-                content=CODE_TEMPLATE.format(lang="",
-                                             code=cursor.brief_comment))
-        # Doxygen comment: multi-line detailed description
-        if has_comment and cursor.raw_comment:
-            clean_comment = Popup.cleanup_comment(has_comment).strip()
-            print(clean_comment)
-            if clean_comment:
-                # Only add this if there is a Doxygen comment.
-                popup.__text += FULL_DOC_TEMPLATE.format(
-                    content=CODE_TEMPLATE.format(lang="", code=clean_comment))
+        if has_comment:
+            if settings.show_doc_as_markdown:
+                # Doxygen comment: single-line brief description
+                charset_comment = '/' + '*' + '!' + string.whitespace
+                brief_comment = has_comment.split("\n")[0]
+                brief_comment = brief_comment.lstrip(charset_comment)
+                if brief_comment:
+                    popup.__text += BRIEF_DOC_TEMPLATE.format(
+                        content=brief_comment)
+                # Doxygen comment: multi-line detailed description
+                mdcomment = Popup.cleanup_comment(has_comment)
+                index = mdcomment.find("@param")
+                if (index >= 0):
+                    mdcomment = mdcomment[:index] + "\n**Parameters**:\n" + mdcomment[index:]
+                doc_replace = [
+                    [ r'@param\s+([_a-zA-Z0-9.]+)\s*', "- `\\1`: " ],
+                    [ r'@returns?\s*',  "\n**Returns**:\n" ],
+                    [ r'@see(also)?\b', "\n**See also**:\n" ],
+                    [ r'@f\$', "`" ],
+                    [ r'@[{}]', "" ],
+                ]
+                for replace in doc_replace:
+                    mdcomment = re.sub(replace[0], replace[1], mdcomment)
+                #window = sublime.active_window()
+                #regexp = re.compile(r'\b([_a-zA-Z0-9]+)\(\)')
+                #for match in re.finditer(regexp, mdcomment):
+                #    symbol = window.lookup_symbol_in_index(match.group(1))
+                #    print("DEBUG: found symbol: " + str(symbol))
+                #    link = Popup.link_from_location(
+                #        Popup.location_from_type(symbol),
+                #        match.group(1))
+                #    print("DEBUG: created link: " + str(link))
+                if mdcomment:
+                    # Only add this if there is a Doxygen comment.
+                    popup.__text += FULL_DOC_TEMPLATE.format(
+                        content=mdcomment)
+            else:
+                # Doxygen comment: single-line brief description
+                if cursor.brief_comment:
+                    popup.__text += BRIEF_DOC_TEMPLATE.format(
+                        content=CODE_TEMPLATE.format(code=cursor.brief_comment,
+                                                     lang=""))
+                # Doxygen comment: multi-line detailed description
+                if cursor.raw_comment:
+                    clean_comment = Popup.cleanup_comment(has_comment).strip()
+                    log.debug("Cleaned comment:\n" + clean_comment)
+                    if clean_comment:
+                        # Only add this if there is a Doxygen comment.
+                        popup.__text += FULL_DOC_TEMPLATE.format(
+                            content=CODE_TEMPLATE.format(code=clean_comment,
+                                                         lang=""))
         # Show macro body
         if is_macro:
             body = "#define "
@@ -517,7 +557,6 @@ class Popup:
                     break
             return lines[first_non_empty_line_idx:]
 
-        import string
         lines = raw_comment.split('\n')
         chars_to_strip = '/' + '*' + '!' + string.whitespace
         lines = [line.lstrip(chars_to_strip) for line in lines]
